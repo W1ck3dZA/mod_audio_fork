@@ -5,6 +5,9 @@ set -e
 # build.sh - Build and install mod_audio_fork for FreeSWITCH
 # ============================================================
 
+# Resolve script directory once (before any cd)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Configuration (override via environment variables if needed)
 FREESWITCH_INCLUDE_DIR="${FREESWITCH_INCLUDE_DIR:-/usr/local/freeswitch/include/freeswitch}"
 FREESWITCH_LIBRARY="${FREESWITCH_LIBRARY:-/usr/local/freeswitch/lib/libfreeswitch.so}"
@@ -32,9 +35,6 @@ install_dependencies() {
 
 # ---- Build ----
 build() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
     log_info "Building mod_audio_fork (${BUILD_TYPE})..."
     log_info "  FreeSWITCH include: ${FREESWITCH_INCLUDE_DIR}"
     log_info "  FreeSWITCH library: ${FREESWITCH_LIBRARY}"
@@ -50,8 +50,8 @@ build() {
     fi
 
     # Create build directory
-    mkdir -p "${script_dir}/build"
-    cd "${script_dir}/build"
+    mkdir -p "${SCRIPT_DIR}/build"
+    cd "${SCRIPT_DIR}/build"
 
     # Configure
     cmake .. \
@@ -62,21 +62,38 @@ build() {
     # Build
     make -j"$(nproc)"
 
-    log_info "Build complete: ${script_dir}/build/mod_audio_fork.so"
+    log_info "Build complete: ${SCRIPT_DIR}/build/mod_audio_fork.so"
 }
 
 # ---- Install ----
 install_module() {
-    local script_dir
-    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    local so_file="${script_dir}/build/mod_audio_fork.so"
+    local so_file="${SCRIPT_DIR}/build/mod_audio_fork.so"
 
+    # Try multiple locations in case of path resolution issues
     if [ ! -f "${so_file}" ]; then
-        log_error "mod_audio_fork.so not found. Run build first."
-        exit 1
+        # Try relative to current directory
+        if [ -f "./build/mod_audio_fork.so" ]; then
+            so_file="./build/mod_audio_fork.so"
+        elif [ -f "./mod_audio_fork.so" ]; then
+            so_file="./mod_audio_fork.so"
+        else
+            # Search for it
+            local found
+            found="$(find "${SCRIPT_DIR}" -name 'mod_audio_fork.so' -type f 2>/dev/null | head -1)"
+            if [ -n "${found}" ]; then
+                so_file="${found}"
+            else
+                log_error "mod_audio_fork.so not found. Run build first."
+                log_error "  Searched: ${SCRIPT_DIR}/build/mod_audio_fork.so"
+                log_error "  SCRIPT_DIR=${SCRIPT_DIR}"
+                log_error "  PWD=$(pwd)"
+                ls -la "${SCRIPT_DIR}/build/" 2>/dev/null || true
+                exit 1
+            fi
+        fi
     fi
 
-    log_info "Installing mod_audio_fork.so to ${FREESWITCH_MOD_DIR}..."
+    log_info "Installing ${so_file} to ${FREESWITCH_MOD_DIR}..."
     cp "${so_file}" "${FREESWITCH_MOD_DIR}/"
     chown freeswitch:freeswitch "${FREESWITCH_MOD_DIR}/mod_audio_fork.so"
     log_info "Module installed successfully."
