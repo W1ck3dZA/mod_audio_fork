@@ -1,22 +1,17 @@
-# Building mod_audio_fork on Ubuntu 22.04
-
-This guide will help you build and install `mod_audio_fork` on Ubuntu 22.04.
+# Building mod_audio_fork
 
 ## Prerequisites
 
-### 1. Install FreeSWITCH
+### 1. FreeSWITCH
 
-First, you need to install FreeSWITCH. You have two options:
+You need a working FreeSWITCH installation with development headers.
 
-#### Option A: Install from packages (Recommended)
-
+**From packages (Debian/Ubuntu):**
 ```bash
-sudo apt-get update
 sudo apt-get install -y freeswitch freeswitch-dev
 ```
 
-#### Option B: Build from source
-
+**From source:**
 ```bash
 git clone https://github.com/signalwire/freeswitch.git
 cd freeswitch
@@ -26,83 +21,76 @@ make
 sudo make install
 ```
 
-### 2. Install Build Dependencies
-
-The build script will automatically install these, but you can install them manually:
+### 2. Build Dependencies
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y \
-    cmake \
-    libwebsockets-dev \
-    libboost-all-dev
+sudo apt-get install -y cmake build-essential libwebsockets-dev libboost-all-dev
 ```
 
-## Building the Module
+## Building
 
-### Quick Build (Recommended)
+### Using build.sh (Recommended)
 
-1. Navigate to the mod_audio_fork directory:
-
-```bash
-cd mod_audio_fork
-```
-
-2. Make the build script executable:
+The `build.sh` script handles dependencies, building, and installation:
 
 ```bash
 chmod +x build.sh
+
+# Do everything: install deps, build, and install
+sudo ./build.sh all
+
+# Or run individual steps:
+sudo ./build.sh deps      # Install build dependencies only
+./build.sh build           # Configure and build only
+sudo ./build.sh install    # Install the .so to FreeSWITCH modules dir only
+./build.sh --help          # Show usage and options
 ```
 
-3. Run the build script:
+#### Environment Variables
 
+You can override default paths via environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `FREESWITCH_INCLUDE_DIR` | `/usr/local/freeswitch/include/freeswitch` | Path to FreeSWITCH headers |
+| `FREESWITCH_LIBRARY` | `/usr/local/freeswitch/lib/libfreeswitch.so` | Path to FreeSWITCH shared library |
+| `FREESWITCH_MOD_DIR` | `/usr/local/freeswitch/mod` | Directory to install the module |
+| `BUILD_TYPE` | `Release` | CMake build type (`Release` or `Debug`) |
+
+Example with custom paths:
 ```bash
-./build.sh
+FREESWITCH_INCLUDE_DIR=/usr/include/freeswitch \
+FREESWITCH_LIBRARY=/usr/lib/libfreeswitch.so \
+FREESWITCH_MOD_DIR=/usr/lib/freeswitch/mod \
+./build.sh all
 ```
-
-The script will:
-
-- Check for all dependencies
-- Install missing packages automatically
-- Configure and build the module
-- Offer to install it to the FreeSWITCH modules directory
 
 ### Manual Build
-
-If you prefer to build manually:
-
-1. Create build directory:
 
 ```bash
 mkdir build
 cd build
-```
 
-2. Configure with CMake:
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DFREESWITCH_INCLUDE_DIR="/usr/local/freeswitch/include/freeswitch" \
+  -DFREESWITCH_LIBRARY="/usr/local/freeswitch/lib/libfreeswitch.so"
 
-```bash
-cmake .. -DCMAKE_BUILD_TYPE=Release -DFREESWITCH_INCLUDE_DIR="/usr/local/freeswitch/include/freeswitch" -DFREESWITCH_LIBRARY="/usr/local/freeswitch/lib/libfreeswitch.so"
-```
-
-3. Build:
-
-```bash
 make -j$(nproc)
 ```
 
-4. Install:
-
+Then install:
 ```bash
-sudo cp mod_audio_fork.so /usr/local/freeswitch/mod
+sudo cp mod_audio_fork.so /usr/local/freeswitch/mod/
 sudo chown freeswitch:freeswitch /usr/local/freeswitch/mod/mod_audio_fork.so
 ```
 
-## Installation and Configuration
+## Installation & Configuration
 
 ### 1. Load the Module
 
-Add the following line to your FreeSWITCH configuration file `/etc/freeswitch/modules.conf.xml`:
-
+Add to your FreeSWITCH `modules.conf.xml`:
 ```xml
 <load module="mod_audio_fork"/>
 ```
@@ -113,87 +101,42 @@ Add the following line to your FreeSWITCH configuration file `/etc/freeswitch/mo
 sudo systemctl restart freeswitch
 ```
 
-### 3. Verify Installation
-
-Connect to FreeSWITCH CLI and check if the module is loaded:
-
+Or reload from fs_cli:
 ```bash
-fs_cli -x "show modules | grep audio_fork"
+fs_cli -x "reload mod_audio_fork"
 ```
 
-You should see `mod_audio_fork` in the list.
-
-## Usage
-
-### Basic Usage
-
-Start audio streaming with bidirectional audio support:
+### 3. Verify
 
 ```bash
-fs_cli -x "uuid_audio_fork <uuid> start <wss-url> mixed 8k"
+fs_cli -x "module_exists mod_audio_fork"
 ```
-
-### Parameters
-
-- `<uuid>`: The FreeSWITCH call UUID
-- `<wss-url>`: WebSocket URL (ws:// or wss://)
-- `mixed`: Enables bidirectional audio (incoming audio will be played back)
-- `8k`: Sample rate (8k or 16k)
-
-### Example
-
-```bash
-fs_cli -x "uuid_audio_fork 12345678-1234-1234-1234-123456789012 start wss://your-server.com/audio mixed 8k"
-```
-
-### Commands
-
-- `start`: Start audio streaming
-- `stop`: Stop audio streaming
-- `pause`: Pause audio streaming
-- `resume`: Resume audio streaming
-- `send_text`: Send text message to WebSocket
-- `stop_play`: Stop audio playback
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Module not found**: Make sure FreeSWITCH is installed and the module is in the correct directory
-2. **Dependencies missing**: Run the build script which will install missing dependencies
-3. **Permission denied**: Make sure the module file is owned by freeswitch:freeswitch
-4. **Build errors**: Check that all dependencies are installed and FreeSWITCH headers are available
+| Problem | Solution |
+|---|---|
+| Module not found | Verify `mod_audio_fork.so` is in the FreeSWITCH modules directory |
+| Permission denied | Ensure the file is owned by `freeswitch:freeswitch` |
+| Missing dependencies | Run `ldd mod_audio_fork.so` to check for unresolved symbols |
+| Build errors | Ensure FreeSWITCH headers and all dependencies are installed |
 
-### Debug Information
+### Debug Logging
 
-Check FreeSWITCH logs for errors:
-
+Check FreeSWITCH logs:
 ```bash
 tail -f /var/log/freeswitch/freeswitch.log
 ```
 
-### Verify Dependencies
-
-Check if the module has all required dependencies:
-
+Or set debug level in fs_cli:
 ```bash
-ldd /usr/lib/freeswitch/mod/libmod_audio_fork.so
+fs_cli -x "console loglevel debug"
 ```
 
-## Features
+### Verify Library Dependencies
 
-- **Bidirectional Audio**: Stream audio to WebSocket and receive audio back for playback
-- **Multiple Audio Formats**: Support for raw, WAV, MP3, and OGG audio
-- **Sample Rate Conversion**: Automatic resampling between different sample rates
-- **Audio Markers**: Support for audio markers and synchronization
-- **TLS Support**: Secure WebSocket connections with TLS
-- **High Performance**: Optimized for low-latency audio streaming
-
-## Support
-
-For issues and questions:
-
-- Check the FreeSWITCH logs
-- Verify all dependencies are installed
-- Ensure FreeSWITCH is properly configured
-- Test with a simple WebSocket server first
+```bash
+ldd /usr/local/freeswitch/mod/mod_audio_fork.so
+```
