@@ -1,187 +1,253 @@
 # mod_audio_fork
 
-A Freeswitch module that attaches a bug to a media server endpoint and streams L16 audio via websockets to a remote server.  This module also supports receiving media from the server to play back to the caller, enabling the creation of full-fledged IVR or dialog-type applications.
+A FreeSWITCH module that attaches a media bug to a channel and streams L16 audio via WebSockets to a remote server. This module supports **bidirectional audio** — receiving audio back from the server for real-time playback to the caller, enabling full-fledged IVR, dialog, and voice-bot applications.
 
-#### Environment variables
-- MOD_AUDIO_FORK_SUBPROTOCOL_NAME - optional, name of the [websocket sub-protocol](https://tools.ietf.org/html/rfc6455#section-1.9) to advertise; defaults to "audio.drachtio.org"
-- MOD_AUDIO_FORK_SERVICE_THREADS - optional, number of libwebsocket service threads to create; these threads handling sending all messages for all sessions.  Defaults to 1, but can be set to as many as 5.
+## Features
+
+- **Bidirectional Audio** — Stream audio to a WebSocket server and receive audio back for real-time playback
+- **Binary Audio Streaming** — Receive raw binary audio frames from the server (in addition to base64-encoded JSON)
+- **Audio Markers** — Synchronize audio playback with named markers (`mark` / `clearMarks`)
+- **Multiple Mix Types** — Mono (caller only), mixed (caller + callee), or stereo (separate channels)
+- **Flexible Sample Rates** — 8000, 16000, 24000, 32000, 48000, 64000 Hz (any multiple of 8000)
+- **Automatic Resampling** — Built-in Speex resampler for sample rate conversion
+- **TLS Support** — Secure WebSocket connections (wss://)
+- **SIMD Optimized** — AVX2/SSE2 vector math for audio processing
+- **Graceful Shutdown** — Drain audio buffers before closing connections
+
+## Environment Variables
+
+| Variable | Description | Default |
+|---|---|---|
+| `MOD_AUDIO_FORK_SUBPROTOCOL_NAME` | WebSocket [sub-protocol](https://tools.ietf.org/html/rfc6455#section-1.9) name | `audio.drachtio.org` |
+| `MOD_AUDIO_FORK_SERVICE_THREADS` | Number of libwebsocket service threads (1–5) | `1` |
+| `MOD_AUDIO_FORK_BUFFER_SECS` | Audio buffer size in seconds (1–5) | `2` |
+
+## Channel Variables
+
+| Variable | Description |
+|---|---|
+| `MOD_AUDIO_BASIC_AUTH_USERNAME` | HTTP Basic Auth username for WebSocket connection |
+| `MOD_AUDIO_BASIC_AUTH_PASSWORD` | HTTP Basic Auth password for WebSocket connection |
+| `MOD_AUDIO_FORK_ALLOW_SELFSIGNED` | Allow self-signed TLS certificates (`true`/`false`) |
+| `MOD_AUDIO_FORK_SKIP_SERVER_CERT_HOSTNAME_CHECK` | Skip TLS hostname verification (`true`/`false`) |
+| `MOD_AUDIO_FORK_ALLOW_EXPIRED` | Allow expired TLS certificates (`true`/`false`) |
 
 ## API
 
+### Command Syntax
+
+```
+uuid_audio_fork <uuid> <command> [arguments...]
+```
+
 ### Commands
-The freeswitch module exposes the following API commands:
+
+#### start
 
 ```
-uuid_audio_fork <uuid> start <wss-url> <mix-type> <sampling-rate> <metadata>
+uuid_audio_fork <uuid> start <wss-url> <mix-type> <sampling-rate> [bugname] [metadata] [bidirectionalAudio_enabled] [bidirectionalAudio_stream_enabled] [bidirectionalAudio_stream_samplerate]
 ```
-Attaches media bug and starts streaming audio stream to the back-end server.  Audio is streamed in linear 16 format (16-bit PCM encoding) with either one or two channels depending on the mix-type requested.
-- `uuid` - unique identifier of Freeswitch channel
-- `wss-url` - websocket url to connect and stream audio to
-- `mix-type` - choice of 
-  - "mono" - single channel containing caller's audio
-  - "mixed" - single channel containing both caller and callee audio
-  - "stereo" - two channels with caller audio in one and callee audio in the other.
-- `sampling-rate` - choice of
-  - "8k" = 8000 Hz sample rate will be generated
-  - "16k" = 16000 Hz sample rate will be generated
-- `metadata` - a text frame of arbitrary data to send to the back-end server immediately upon connecting.  Once this text frame has been sent, the incoming audio will be sent in binary frames to the server.
+
+Attaches a media bug and starts streaming audio to the WebSocket server.
+
+| Parameter | Description |
+|---|---|
+| `uuid` | FreeSWITCH channel UUID |
+| `wss-url` | WebSocket URL (`ws://`, `wss://`, `http://`, or `https://`) |
+| `mix-type` | `mono` (caller only), `mixed` (caller + callee), or `stereo` (separate channels) |
+| `sampling-rate` | `8k`, `16k`, or any integer multiple of 8000 (e.g. `24000`, `32000`, `64000`) |
+| `bugname` | Optional bug name for multiple concurrent forks (default: `audio_fork`) |
+| `metadata` | Optional JSON metadata sent as a text frame immediately after connecting |
+| `bidirectionalAudio_enabled` | `true` or `false` — enable receiving audio from server (default: `true`) |
+| `bidirectionalAudio_stream_enabled` | `true` or `false` — enable binary audio streaming from server |
+| `bidirectionalAudio_stream_samplerate` | Sample rate of incoming audio from server (e.g. `8000`, `16000`) |
+
+#### stop
 
 ```
-uuid_audio_fork <uuid> send_text <metadata>
+uuid_audio_fork <uuid> stop [bugname] [metadata]
 ```
-Send a text frame of arbitrary data to the remote server (e.g. this can be used to notify of DTMF events).
+
+Closes the WebSocket connection and detaches the media bug. Optionally sends a final text frame before closing.
+
+#### send_text
 
 ```
-uuid_audio_fork <uuid> stop <metadata>
+uuid_audio_fork <uuid> send_text [bugname] <text>
 ```
-Closes websocket connection and detaches media bug, optionally sending a final text frame over the websocket connection before closing.
+
+Sends a text frame to the remote server (e.g. DTMF events, control messages).
+
+#### pause
+
+```
+uuid_audio_fork <uuid> pause [bugname]
+```
+
+Pauses audio streaming (frames are discarded).
+
+#### resume
+
+```
+uuid_audio_fork <uuid> resume [bugname]
+```
+
+Resumes audio streaming after a pause.
+
+#### graceful-shutdown
+
+```
+uuid_audio_fork <uuid> graceful-shutdown [bugname]
+```
+
+Initiates a graceful shutdown — stops sending new audio but allows buffered audio to drain before closing.
+
+#### stop_play
+
+```
+uuid_audio_fork <uuid> stop_play [bugname]
+```
+
+Stops any current audio playback by clearing the playout buffer.
 
 ### Events
-An optional feature of this module is that it can receive JSON text frames from the server and generate associated events to an application.  The format of the JSON text frames and the associated events are described below.
 
-#### audio
-##### server JSON message
-The server can provide audio content to be played back to the caller by sending a JSON text frame like this:
+The module generates the following FreeSWITCH custom events:
+
+| Event | Description |
+|---|---|
+| `mod_audio_fork::connect` | WebSocket connection established successfully |
+| `mod_audio_fork::connect_failed` | WebSocket connection failed (body contains reason) |
+| `mod_audio_fork::disconnect` | WebSocket connection closed or server sent disconnect |
+| `mod_audio_fork::buffer_overrun` | Audio buffer overrun — frames are being dropped |
+| `mod_audio_fork::transcription` | Server sent a transcription message |
+| `mod_audio_fork::transfer` | Server sent a transfer request |
+| `mod_audio_fork::play_audio` | Server sent audio for playback |
+| `mod_audio_fork::kill_audio` | Server requested to stop current audio playback |
+| `mod_audio_fork::error` | Server reported an error |
+| `mod_audio_fork::json` | Server sent a generic JSON message |
+
+### Server-to-Module Messages
+
+The server can send JSON text frames to control the module:
+
+#### playAudio
+Play audio back to the caller (when using base64-encoded JSON mode):
 ```json
 {
-	"type": "playAudio",
-	"data": {
-		"audioContentType": "raw",
-		"sampleRate": 8000,
-		"audioContent": "base64 encoded raw audio..",
-		"textContent": "Hi there!  How can we help?"
-	}
+  "type": "playAudio",
+  "data": {
+    "audioContentType": "raw",
+    "sampleRate": 8000,
+    "audioContent": "<base64-encoded raw audio>"
+  }
 }
 ```
-The `audioContentType` value can be either `wave` or `raw`.  If the latter, then `sampleRate` must be specified.  The audio content itself is supplied as a base64 encoded string.  The `textContent` attribute can optionally contain the text of the prompt.  This allows an application to choose whether to play the raw audio or to use its own text-to-speech to play the text prompt.
 
-Note that the module does _not_ directly play out the raw audio.  Instead, it writes it to a temporary file and provides the path to the file in the event generated.  It is left to the application to play out this file if it wishes to do so.
-##### Freeswitch event generated
-**Name**: mod_audio_fork::play_audio
-**Body**: JSON string
-```
-{
-  "audioContentType": "raw",
-  "sampleRate": 8000,
-  "textContent": "Hi there!  How can we help?",
-  "file": "/tmp/7dd5e34e-5db4-4edb-a166-757e5d29b941_2.tmp.r8"
-}
-```
-Note the audioContent attribute has been replaced with the path to the file containing the audio.  This temporary file will be removed when the Freeswitch session ends.
 #### killAudio
-##### server JSON message
-The server can provide a request to kill the current audio playback:
+Stop current audio playback and clear buffers:
 ```json
 {
-	"type": "killAudio",
+  "type": "killAudio"
 }
 ```
-Any current audio being played to the caller will be immediately stopped.  The event sent to the application is for information purposes only.
 
-##### Freeswitch event generated
-**Name**: mod_audio_fork::kill_audio
-**Body**: JSON string - the data attribute from the server message
+#### mark
+Add a named marker for audio synchronization:
+```json
+{
+  "type": "mark",
+  "data": {
+    "name": "marker-name"
+  }
+}
+```
+When the marker is reached during playout, the module sends a mark event back to the server. Maximum 30 markers can be queued.
 
+#### clearMarks
+Clear all pending markers:
+```json
+{
+  "type": "clearMarks"
+}
+```
 
 #### transcription
-##### server JSON message
-The server can optionally provide transcriptions to the application in real-time:
 ```json
 {
-	"type": "transcription",
-	"data": {
-    
-	}
+  "type": "transcription",
+  "data": { ... }
 }
 ```
-The transcription data can be any JSON object; for instance, a server may choose to return a transcript and an associated confidence level.  Whatever is provided as the `data` attribute will be attached to the generated event.
-
-##### Freeswitch event generated
-**Name**: mod_audio_fork::transcription
-**Body**: JSON string - the data attribute from the server message
 
 #### transfer
-##### server JSON message
-The server can optionally provide a request to transfer the call:
 ```json
 {
-	"type": "transfer",
-	"data": {
-    
-	}
+  "type": "transfer",
+  "data": { ... }
 }
 ```
-The transfer data can be any JSON object and is left for the application to determine how to handle it and accomplish the call transfer.  Whatever is provided as the `data` attribute will be attached to the generated event.
-
-##### Freeswitch event generated
-**Name**: mod_audio_fork::transfer
-**Body**: JSON string - the data attribute from the server message
 
 #### disconnect
-##### server JSON message
-The server can optionally request to disconnect the caller:
 ```json
 {
-	"type": "disconnect"
+  "type": "disconnect",
+  "data": { ... }
 }
 ```
-Note that the module _does not_ close the Freeswitch channel when a disconnect request is received.  It is left for the application to determine whether to tear down the call.
-
-##### Freeswitch event generated
-**Name**: mod_audio_fork::disconnect
-**Body**: none
 
 #### error
-##### server JSON message
-The server can optionally report an error of some kind.  
 ```json
 {
-	"type": "error",
-	"data": {
-    
-	}
+  "type": "error",
+  "data": { ... }
 }
 ```
-The error data can be any JSON object and is left for the application to the application to determine what, if any, action should be taken in response to an error..  Whatever is provided as the `data` attribute will be attached to the generated event.
 
-##### Freeswitch event generated
-**Name**: mod_audio_fork::error
-**Body**: JSON string - the data attribute from the server message
+#### Binary Audio Streaming
 
-## Usage
-When using [drachtio-fsrmf](https://www.npmjs.com/package/drachtio-fsmrf), you can access this API command via the api method on the 'endpoint' object.
-```js
-const url = 'https://70f21a76.ngrok.io';
-const callerData = {to: '6173333456', from: '2061236666', callid: req.get('Call-Id')};
-ep.api('uuid_audio_fork', `${ep.uuid} start ${url} mono 8k ${JSON.stringify(callerData)}`);
-```
-or, from version 1.4.1 on, by using the Endpoint convenience methods:
-```js
-await ep.forkAudioStart({
-  wsUrl,
-  mixType: 'stereo',
-  sampling: '16k',
-  metadata
-});
-..
-ep.forkAudioSendText(moremetadata);
-..
-ep.forkAudioStop(evenmoremetadata);
-```
-Each of the methods above returns a promise that resolves when the api command has been executed, or throws an error.
-## Examples
-[audio_fork.js](../../examples/audio_fork.js) provides an example of an application that connects an incoming call to Freeswitch and then forks the audio to a remote websocket server.
+When `bidirectionalAudio_stream_enabled` is set to `true`, the server can send raw binary audio frames directly over the WebSocket (instead of base64-encoded JSON). This is more efficient for real-time audio streaming. The module handles:
 
-To run this app, you can run [the simple websocket server provided](../../examples/ws_server.js) in a separate terminal.  It will listen on port 3001 and will simply write the incoming raw audio to `/tmp/audio.raw` in linear16 format with no header or file container.
+- Automatic resampling if the server's sample rate differs from the channel's rate
+- Pre-buffering to smooth out network jitter
+- Audio marker interleaving for synchronization
 
-So in the first terminal window run:
-```
-node ws_server.js
-```
-And in the second window run:
-```
-node audio_fork.js http://localhost:3001
-```
-The app uses text-to-speech to play prompts, so you will need mod_google_tts loaded as well, and configured to use your GCS cloud credentials to access Google Cloud Text-to-Speech.  (If you don't want to run mod_google_tts you can of course simply modify the application remove the prompt, just be aware that you will hear silence when you connect, and should simply begin speaking after the call connects).
+## Building
 
+See [BUILD.md](BUILD.md) for detailed build instructions.
 
+### Quick Start
+
+```bash
+# Install dependencies, build, and install
+chmod +x build.sh
+sudo ./build.sh all
+
+# Or step by step:
+sudo ./build.sh deps      # Install build dependencies
+./build.sh build           # Build the module
+sudo ./build.sh install    # Install to FreeSWITCH
+```
+
+## Usage Example
+
+```bash
+# Start streaming with bidirectional audio
+fs_cli -x "uuid_audio_fork <uuid> start wss://your-server.com/audio mixed 16k mybug {} true true 16000"
+
+# Send a text message
+fs_cli -x "uuid_audio_fork <uuid> send_text mybug {\"event\":\"dtmf\",\"digit\":\"1\"}"
+
+# Pause streaming
+fs_cli -x "uuid_audio_fork <uuid> pause mybug"
+
+# Resume streaming
+fs_cli -x "uuid_audio_fork <uuid> resume mybug"
+
+# Stop with final message
+fs_cli -x "uuid_audio_fork <uuid> stop mybug {\"reason\":\"complete\"}"
+```
+
+## License
+
+See [LICENSE](LICENSE) for details.
